@@ -1,0 +1,39 @@
+{
+  "name": "@nodify_at/hailo.js",
+  "version": "1.0.0",
+  "description": "Hailo Node.js Bindings",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "install": "node-gyp-build",
+    "build": "tsc -p tsconfig.prod.json",
+    "prebuild": "prebuildify --napi --strip --tag-armv",
+    "clean": "node-gyp clean && rm -rf prebuilds",
+    "configure": "node-gyp configure",
+    "version:patch": "npm version patch",
+    "version:minor": "npm version minor",
+    "version:major": "npm version major"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@nodify_at/picamera.js": "^1.0.5",
+    "@types/node": "^22.16.3",
+    "@types/ws": "^8.18.1",
+    "eslint": "^9.31.0",
+    "eslint-config-prettier": "^10.1.5",
+    "prettier": "^3.6.2",
+    "sharp": "^0.34.3",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.36.0",
+    "ws": "^8.18.3"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.4.0",
+    "node-gyp-build": "^4.8.4",
+    "prebuildify": "^6.0.1"
+  }
+}

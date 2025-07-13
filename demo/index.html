@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Object Detection with Temporal Filtering</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .detection-box {
+            position: absolute;
+            border: 3px solid;
+            pointer-events: none;
+            box-sizing: border-box;
+            transition: all 0.1s ease-out;
+        }
+        .detection-box.new {
+            border-style: dashed;
+            opacity: 0.6;
+        }
+        .detection-box.stable {
+            border-style: solid;
+            opacity: 1;
+        }
+        .detection-label {
+            position: absolute;
+            padding: 4px 8px;
+            font-size: 14px;
+            font-weight: bold;
+            color: white;
+            white-space: nowrap;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            border-radius: 3px;
+            opacity: 0.9;
+        }
+        .tracking-id {
+            font-size: 10px;
+            opacity: 0.7;
+            margin-left: 4px;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
+        .debug-object {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+<div class="container mx-auto p-4">
+    <h1 class="text-3xl font-bold mb-6 text-center">Live Object Detection with Temporal Filtering</h1>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Video Stream -->
+        <div class="lg:col-span-2">
+            <div class="bg-gray-800 rounded-lg p-4">
+                <div id="videoContainer" class="relative inline-block bg-black rounded overflow-hidden">
+                    <canvas id="videoCanvas" width="1280" height="720" class="block max-w-full h-auto"></canvas>
+                    <div id="detectionOverlay" class="absolute top-0 left-0 pointer-events-none"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Panel -->
+        <div class="space-y-4">
+            <!-- Connection Status -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <h2 class="text-xl font-semibold mb-3">Connection Status</h2>
+                <div class="space-y-2">
+                    <div class="flex justify-between">
+                        <span>WebSocket:</span>
+                        <span id="wsStatus" class="font-mono">Disconnected</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Video Channel:</span>
+                        <span id="videoStatus" class="font-mono">-</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>AI Channel:</span>
+                        <span id="aiStatus" class="font-mono">-</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Debug Channel:</span>
+                        <span id="debugStatus" class="font-mono">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stream Stats -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <h2 class="text-xl font-semibold mb-3">Stream Stats</h2>
+                <div class="space-y-2">
+                    <div class="flex justify-between">
+                        <span>FPS:</span>
+                        <span id="fps" class="font-mono">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Frame Size:</span>
+                        <span id="frameSize" class="font-mono">0 KB</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Frame #:</span>
+                        <span id="frameNumber" class="font-mono">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Detection Stats -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <h2 class="text-xl font-semibold mb-3">Detection Stats</h2>
+                <div class="space-y-2">
+                    <div class="flex justify-between">
+                        <span>Raw Detections:</span>
+                        <span id="rawDetections" class="font-mono text-gray-400">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Tracked Objects:</span>
+                        <span id="trackedObjects" class="font-mono text-yellow-400">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>Visible Objects:</span>
+                        <span id="visibleObjects" class="font-mono text-green-400">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tracking State -->
+            <div class="bg-gray-800 rounded-lg p-4 max-h-64 overflow-y-auto">
+                <h2 class="text-xl font-semibold mb-3">Tracking State</h2>
+                <div id="trackingState" class="space-y-1 text-xs font-mono">
+                    <div class="text-gray-500">Waiting for data...</div>
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <h2 class="text-xl font-semibold mb-3">Controls</h2>
+                <div class="space-y-2">
+                    <label class="flex items-center space-x-2">
+                        <input type="checkbox" id="showTrackingIds" class="rounded" checked>
+                        <span>Show Tracking IDs</span>
+                    </label>
+                    <label class="flex items-center space-x-2">
+                        <input type="checkbox" id="showDebugInfo" class="rounded">
+                        <span>Show Debug Info</span>
+                    </label>
+                    <button id="reconnectBtn" class="w-full bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded transition mt-4">
+                        Reconnect
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Configuration
+    const WS_URL = 'ws://192.168.0.187:8080';
+
+    // State
+    let ws = null;
+    let currentDetections = [];
+    let trackingStateData = [];
+    let frameImage = new Image();
+    let showTrackingIds = true;
+    let showDebugInfo = false;
+    let currentFrameNumber = 0;
+
+    // UI Elements
+    const canvas = document.getElementById('videoCanvas');
+    const ctx = canvas.getContext('2d');
+    const detectionOverlay = document.getElementById('detectionOverlay');
+    const wsStatus = document.getElementById('wsStatus');
+    const videoStatus = document.getElementById('videoStatus');
+    const aiStatus = document.getElementById('aiStatus');
+    const debugStatus = document.getElementById('debugStatus');
+    const fpsElement = document.getElementById('fps');
+    const frameSizeElement = document.getElementById('frameSize');
+    const frameNumberElement = document.getElementById('frameNumber');
+    const rawDetectionsElement = document.getElementById('rawDetections');
+    const trackedObjectsElement = document.getElementById('trackedObjects');
+    const visibleObjectsElement = document.getElementById('visibleObjects');
+    const trackingStateElement = document.getElementById('trackingState');
+    const reconnectBtn = document.getElementById('reconnectBtn');
+    const showTrackingIdsCheckbox = document.getElementById('showTrackingIds');
+    const showDebugInfoCheckbox = document.getElementById('showDebugInfo');
+
+    // Color palette for different object classes
+    const colors = [
+        '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF',
+        '#00FFFF', '#FFA500', '#FF1493', '#00CED1', '#FFD700',
+        '#32CD32', '#FF69B4', '#8A2BE2', '#FF4500', '#1E90FF'
+    ];
+
+    function getColorForClass(classId) {
+        return colors[classId % colors.length];
+    }
+
+    function updateOverlayScale() {
+        const canvasRect = canvas.getBoundingClientRect();
+        const scaleX = canvasRect.width / canvas.width;
+        const scaleY = canvasRect.height / canvas.height;
+        detectionOverlay.style.transform = `scale(${scaleX}, ${scaleY})`;
+    }
+
+    function connectWebSocket() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+        }
+
+        wsStatus.textContent = 'Connecting...';
+        wsStatus.className = 'font-mono text-yellow-400';
+
+        ws = new WebSocket(WS_URL);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = () => {
+            console.log('WebSocket connected');
+            wsStatus.textContent = 'Connected';
+            wsStatus.className = 'font-mono text-green-400';
+
+            // Subscribe to channels
+            ws.send(JSON.stringify({ type: 'subscribe', channel: 'video' }));
+            ws.send(JSON.stringify({ type: 'subscribe', channel: 'ai' }));
+            ws.send(JSON.stringify({ type: 'subscribe', channel: 'metadata' }));
+
+            if (showDebugInfo) {
+                ws.send(JSON.stringify({ type: 'subscribe', channel: 'ai-debug' }));
+            }
+        };
+
+        ws.onmessage = (event) => {
+            if (event.data instanceof ArrayBuffer) {
+                handleBinaryMessage(event.data);
+            } else {
+                handleTextMessage(event.data);
+            }
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            wsStatus.textContent = 'Error';
+            wsStatus.className = 'font-mono text-red-400';
+        };
+
+        ws.onclose = () => {
+            console.log('WebSocket disconnected');
+            wsStatus.textContent = 'Disconnected';
+            wsStatus.className = 'font-mono text-red-400';
+            videoStatus.textContent = '-';
+            aiStatus.textContent = '-';
+            debugStatus.textContent = '-';
+        };
+    }
+
+    function handleBinaryMessage(data) {
+        const view = new DataView(data);
+        const headerLength = view.getUint32(0, false);
+
+        const headerBytes = new Uint8Array(data, 4, headerLength);
+        const header = JSON.parse(new TextDecoder().decode(headerBytes));
+
+        if (header.channel === 'video') {
+            const jpegData = new Uint8Array(data, 4 + headerLength);
+            const blob = new Blob([jpegData], { type: 'image/jpeg' });
+            const url = URL.createObjectURL(blob);
+
+            frameImage.onload = () => {
+                ctx.drawImage(frameImage, 0, 0, canvas.width, canvas.height);
+                URL.revokeObjectURL(url);
+                updateOverlayScale();
+                drawDetections();
+            };
+            frameImage.src = url;
+
+            videoStatus.textContent = 'Streaming';
+            videoStatus.className = 'font-mono text-green-400';
+        }
+    }
+
+    function handleTextMessage(data) {
+        const message = JSON.parse(data);
+
+        switch (message.type) {
+            case 'subscribed':
+                console.log(`Subscribed to ${message.channel}`);
+                if (message.channel === 'video') {
+                    videoStatus.textContent = 'Subscribed';
+                    videoStatus.className = 'font-mono text-green-400';
+                } else if (message.channel === 'ai') {
+                    aiStatus.textContent = 'Subscribed';
+                    aiStatus.className = 'font-mono text-green-400';
+                } else if (message.channel === 'ai-debug') {
+                    debugStatus.textContent = 'Subscribed';
+                    debugStatus.className = 'font-mono text-green-400';
+                }
+                break;
+
+            case 'stats':
+                fpsElement.textContent = message.fps || 0;
+                if (message.frameSize) {
+                    frameSizeElement.textContent = `${(message.frameSize / 1024).toFixed(1)} KB`;
+                }
+                if (message.trackedObjects !== undefined) {
+                    trackedObjectsElement.textContent = message.trackedObjects;
+                }
+                break;
+        }
+
+        if (message.channel === 'ai' && message.type === 'detections') {
+            handleDetections(message);
+            aiStatus.textContent = 'Active';
+            aiStatus.className = 'font-mono text-green-400';
+        }
+
+        if (message.channel === 'ai-debug' && message.type === 'tracking_state') {
+            handleTrackingState(message);
+        }
+    }
+
+    function handleDetections(message) {
+        currentDetections = message.detections || [];
+        currentFrameNumber = message.frameNumber || 0;
+
+        frameNumberElement.textContent = currentFrameNumber;
+        visibleObjectsElement.textContent = currentDetections.length;
+
+        if (message.stats) {
+            rawDetectionsElement.textContent = message.stats.raw || 0;
+            trackedObjectsElement.textContent = message.stats.totalTracked || 0;
+            visibleObjectsElement.textContent = message.stats.visible || 0;
+        }
+
+        drawDetections();
+    }
+
+    function handleTrackingState(message) {
+        trackingStateData = message.objects || [];
+        updateTrackingStateDisplay();
+    }
+
+    function updateTrackingStateDisplay() {
+        if (!showDebugInfo || trackingStateData.length === 0) {
+            trackingStateElement.innerHTML = '<div class="text-gray-500">Enable debug info to see tracking state</div>';
+            return;
+        }
+
+        const html = trackingStateData.map(obj => {
+            const statusClass = obj.isVisible ? 'text-green-400' : 'text-yellow-400';
+            const visibilityStatus = obj.isVisible ? 'VISIBLE' : `PENDING (${obj.visibleCount}/6)`;
+
+            return `
+                <div class="flex justify-between ${obj.isVisible ? '' : 'debug-object'}">
+                    <span>${obj.id}: ${obj.className}</span>
+                    <span class="${statusClass}">${visibilityStatus}</span>
+                </div>
+            `;
+        }).join('');
+
+        trackingStateElement.innerHTML = html || '<div class="text-gray-500">No tracked objects</div>';
+    }
+
+    function drawDetections() {
+        detectionOverlay.innerHTML = '';
+
+        currentDetections.forEach((detection) => {
+            const { x1, y1, x2, y2, width, height, classId, className, confidence, trackingId, visibleFrames } = detection;
+
+            const color = getColorForClass(classId || 0);
+            const isStable = visibleFrames && visibleFrames >= 6;
+
+            // Create box
+            const box = document.createElement('div');
+            box.className = `detection-box ${isStable ? 'stable' : 'new'}`;
+            box.style.left = `${x1}px`;
+            box.style.top = `${y1}px`;
+            box.style.width = `${width}px`;
+            box.style.height = `${height}px`;
+            box.style.borderColor = color;
+
+            // Create label
+            const label = document.createElement('div');
+            label.className = 'detection-label';
+            label.style.backgroundColor = color;
+
+            // Position label
+            if (y1 > 24) {
+                label.style.top = `${y1 - 24}px`;
+                label.style.left = `${x1}px`;
+            } else {
+                label.style.top = `${y1}px`;
+                label.style.left = `${x1}px`;
+            }
+
+            // Label text
+            let labelText = `${className || `Class ${classId}`} ${(confidence * 100).toFixed(1)}%`;
+            if (showTrackingIds && trackingId) {
+                labelText += `<span class="tracking-id">#${trackingId}</span>`;
+            }
+            label.innerHTML = labelText;
+
+            detectionOverlay.appendChild(box);
+            detectionOverlay.appendChild(label);
+        });
+    }
+
+    // Event listeners
+    reconnectBtn.addEventListener('click', connectWebSocket);
+
+    showTrackingIdsCheckbox.addEventListener('change', (e) => {
+        showTrackingIds = e.target.checked;
+        drawDetections();
+    });
+
+    showDebugInfoCheckbox.addEventListener('change', (e) => {
+        showDebugInfo = e.target.checked;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            if (showDebugInfo) {
+                ws.send(JSON.stringify({ type: 'subscribe', channel: 'ai-debug' }));
+            } else {
+                ws.send(JSON.stringify({ type: 'unsubscribe', channel: 'ai-debug' }));
+                debugStatus.textContent = '-';
+                debugStatus.className = 'font-mono';
+                trackingStateData = [];
+                updateTrackingStateDisplay();
+            }
+        }
+    });
+
+    // Handle responsive scaling
+    window.addEventListener('resize', updateOverlayScale);
+
+    // Initial connection
+    connectWebSocket();
+
+    // Initial scale setup
+    setTimeout(updateOverlayScale, 100);
+
+    // Heartbeat
+    setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+        }
+    }, 25000);
+</script>
+</body>
+</html>
