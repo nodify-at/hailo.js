@@ -332,7 +332,7 @@ endif
 
 quiet_cmd_regen_makefile = ACTION Regenerating $@
 cmd_regen_makefile = cd $(srcdir); /Users/nodify/.nvm/versions/node/v20.11.1/lib/node_modules/npm/node_modules/node-gyp/gyp/gyp_main.py -fmake --ignore-environment "-Dlibrary=shared_library" "-Dvisibility=default" "-Dnode_root_dir=/Users/nodify/Library/Caches/node-gyp/20.11.1" "-Dnode_gyp_dir=/Users/nodify/.nvm/versions/node/v20.11.1/lib/node_modules/npm/node_modules/node-gyp" "-Dnode_lib_file=/Users/nodify/Library/Caches/node-gyp/20.11.1/<(target_arch)/node.lib" "-Dmodule_root_dir=/Users/nodify/projects/hailo" "-Dnode_engine=v8" "--depth=." "-Goutput_dir=." "--generator-output=build" -I/Users/nodify/projects/hailo/build/config.gypi -I/Users/nodify/.nvm/versions/node/v20.11.1/lib/node_modules/npm/node_modules/node-gyp/addon.gypi -I/Users/nodify/Library/Caches/node-gyp/20.11.1/include/node/common.gypi "--toplevel-dir=." binding.gyp
-Makefile: $(srcdir)/../../Library/Caches/node-gyp/20.11.1/include/node/common.gypi $(srcdir)/binding.gyp $(srcdir)/build/config.gypi $(srcdir)/../../.nvm/versions/node/v20.11.1/lib/node_modules/npm/node_modules/node-gyp/addon.gypi
+Makefile: $(srcdir)/../../Library/Caches/node-gyp/20.11.1/include/node/common.gypi $(srcdir)/binding.gyp $(srcdir)/../../.nvm/versions/node/v20.11.1/lib/node_modules/npm/node_modules/node-gyp/addon.gypi $(srcdir)/build/config.gypi
 	$(call do_cmd,regen_makefile)
 
 # "all" is a concatenation of the "all" targets from all the included
