@@ -1,3 +1,13 @@
+/**
+ * @file detection_utils.cpp
+ * @brief Implementation of object detection output parsing utilities
+
+ * @date 2025
+ * 
+ * This file implements the parsing of Non-Maximum Suppression (NMS) outputs
+ * from object detection models running on Hailo NPU.
+ */
+
 #include <detection_utils.hpp>
 #include <algorithm>
 #include <array>
@@ -6,6 +16,12 @@
 #include <hailo/hailort.hpp>
 
 namespace hailo_addon {
+    /**
+     * @brief COCO dataset class names
+     * 
+     * This array maps class IDs (0-80) to human-readable names.
+     * Index 0 is "background" which is typically not used in detections.
+     */
     static constexpr std::array<std::string_view, 81> COCO_CLASSES = {
         "background", "person", "bicycle", "car", "motorcycle", "airplane", "bus",
         "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign",
@@ -21,6 +37,20 @@ namespace hailo_addon {
         "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
     };
 
+    /**
+     * @brief Parse NMS output buffer and transform coordinates
+     * 
+     * This function handles the complex multi-stage coordinate transformation:
+     * 
+     * Pipeline stages:
+     * 1. Original JPEG (1280x720) -> RGB resize (640x360) for preprocessing
+     * 2. RGB (640x360) -> Letterboxed square (640x640) for model input
+     * 3. Model outputs normalized coordinates (0-1) in 640x640 space
+     * 4. We need to reverse this: Model -> RGB -> JPEG coordinates
+     * 
+     * The letterboxing process adds padding to maintain aspect ratio,
+     * which must be accounted for in the coordinate transformation.
+     */
     std::vector<Detection> parse_nms_output(
         std::span<const uint8_t> data,
         size_t num_classes,
@@ -32,10 +62,12 @@ namespace hailo_addon {
         int model_input_size   // Square inference size (640x640)
     ) {
         std::vector<Detection> detections;
-        detections.reserve(200);
+        detections.reserve(200);  // Pre-allocate for typical detection count
 
         // Step 1: Calculate letterbox parameters for RGB->Model transformation
-        // When resizing 640x360 to 640x640 with letterboxing
+        // When resizing 640x360 to 640x640 with letterboxing:
+        // - Calculate scale to fit the image within the square
+        // - Add padding to center the scaled image
         float scale = std::min(
             static_cast<float>(model_input_size) / rgb_width,
             static_cast<float>(model_input_size) / rgb_height
@@ -44,7 +76,7 @@ namespace hailo_addon {
         int scaled_width = static_cast<int>(rgb_width * scale);
         int scaled_height = static_cast<int>(rgb_height * scale);
 
-        // Letterbox padding (centering the 640x360 image in 640x640)
+        // Calculate padding needed to center the image
         float pad_x = (model_input_size - scaled_width) / 2.0f;
         float pad_y = (model_input_size - scaled_height) / 2.0f;
 
@@ -55,20 +87,22 @@ namespace hailo_addon {
         size_t offset = 0;
         const uint8_t* data_ptr = data.data();
 
+        // Parse detections for each class
         for (size_t class_id = 0; class_id < num_classes; ++class_id) {
             if (offset + sizeof(float32_t) > data.size()) break;
 
-            // Read detection count for this class
+            // Read number of detections for this class
             auto det_count = *reinterpret_cast<const float32_t*>(data_ptr + offset);
             offset += sizeof(float32_t);
 
             uint32_t count = static_cast<uint32_t>(det_count);
-            if (count > 1000) break; // Sanity check
+            if (count > 1000) break; // Sanity check to prevent excessive allocations
 
+            // Parse each detection for this class
             for (uint32_t i = 0; i < count; ++i) {
                 if (offset + sizeof(hailo_bbox_float32_t) > data.size()) break;
 
-                // Read the entire bbox structure at once
+                // Read the bounding box structure
                 hailo_bbox_float32_t bbox = *reinterpret_cast<const hailo_bbox_float32_t*>(data_ptr + offset);
                 offset += sizeof(hailo_bbox_float32_t);
 
@@ -78,7 +112,7 @@ namespace hailo_addon {
                 }
 
                 Detection det;
-                det.class_id = static_cast<int>(class_id + 1);
+                det.class_id = static_cast<int>(class_id + 1);  // COCO uses 1-based IDs
                 det.confidence = bbox.score;
 
                 // Step 3: Multi-stage coordinate transformation
@@ -90,6 +124,7 @@ namespace hailo_addon {
                 float y2_model = bbox.y_max * model_input_size;
 
                 // Stage 2: Remove letterbox padding and scale back to RGB coordinates (640x360)
+                // This reverses the letterboxing transformation
                 float x1_rgb = (x1_model - pad_x) / scale;
                 float y1_rgb = (y1_model - pad_y) / scale;
                 float x2_rgb = (x2_model - pad_x) / scale;
@@ -131,16 +166,29 @@ namespace hailo_addon {
         return detections;
     }
 
+    /**
+     * @brief JavaScript binding for parsing NMS output
+     * 
+     * Expected arguments:
+     * - buffer: TypedArray containing raw NMS output
+     * - numClasses: Number of object classes (e.g., 80 for COCO)
+     * - options: Object with parsing options
+     *   - threshold: Confidence threshold (default 0.5)
+     *   - jpegWidth/Height: Final display dimensions
+     *   - rgbWidth/Height: Intermediate RGB dimensions
+     *   - modelInputSize: Square model input size
+     */
     Napi::Value ParseNMS(const Napi::CallbackInfo &info) {
         Napi::Env env = info.Env();
 
+        // Validate argument count
         if (info.Length() < 3) {
             Napi::TypeError::New(env, "Expected (buffer, numClasses, options)")
                     .ThrowAsJavaScriptException();
             return env.Undefined();
         }
 
-        // Get buffer
+        // Get buffer argument
         if (!info[0].IsTypedArray()) {
             Napi::TypeError::New(env, "First argument must be a typed array")
                     .ThrowAsJavaScriptException();
@@ -163,7 +211,7 @@ namespace hailo_addon {
         }
         size_t num_classes = num_maybe.Unwrap().Uint32Value();
 
-        // Parse options with your specific defaults
+        // Parse options object with defaults
         float threshold = 0.5f;
         int jpeg_width = 1280, jpeg_height = 720;    // Final display size
         int rgb_width = 640, rgb_height = 360;       // Intermediate RGB size
@@ -250,13 +298,14 @@ namespace hailo_addon {
             model_input_size
         );
 
-        // Create result array
+        // Create JavaScript array result
         Napi::Array result = Napi::Array::New(env, detections.size());
 
         for (size_t i = 0; i < detections.size(); ++i) {
             const auto &det = detections[i];
             Napi::Object obj = Napi::Object::New(env);
 
+            // Populate detection object
             obj["classId"] = det.class_id;
             obj["className"] = std::string(
                 det.class_id > 0 && static_cast<size_t>(det.class_id) < COCO_CLASSES.size()
@@ -277,6 +326,12 @@ namespace hailo_addon {
         return result;
     }
 
+    /**
+     * @brief Get human-readable class name from class ID
+     * 
+     * Maps COCO dataset class IDs to their string names.
+     * Returns "unknown" for invalid IDs.
+     */
     Napi::Value GetClassName(const Napi::CallbackInfo &info) {
         if (!info[0].IsNumber()) {
             return Napi::String::New(info.Env(), "unknown");
@@ -289,6 +344,7 @@ namespace hailo_addon {
 
         int class_id = num_maybe.Unwrap().Int32Value();
 
+        // Check bounds and return appropriate name
         if (class_id >= 0 && static_cast<size_t>(class_id) < COCO_CLASSES.size()) {
             return Napi::String::New(info.Env(), std::string(COCO_CLASSES[class_id]));
         }
