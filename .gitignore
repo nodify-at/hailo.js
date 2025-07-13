@@ -5,3 +5,4 @@ node_modules
 *.hef
 .DS_Store
 include
+build

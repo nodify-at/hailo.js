@@ -6,15 +6,12 @@
   "types": "./dist/index.d.ts",
   "type": "module",
   "files": [
-    "dist/",
-    "build/",
-    "prebuilds/",
+    "lib/**/*",
+    "dist/**/*",
+    "prebuilds/**/*",
     "binding.gyp",
-    "src/",
-    "include/",
     "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
+    "LICENSE"
   ],
   "scripts": {
     "install": "node-gyp-build",
@@ -125,13 +122,13 @@
   },
   "dependencies": {
     "node-addon-api": "^8.4.0",
-    "node-gyp-build": "^4.8.4"
+    "node-gyp-build": "^4.8.4",
+    "prebuildify": "^6.0.1"
   },
   "directories": {
     "lib": "dist",
     "src": "src",
-    "test": "test",
-    "example": "examples"
+    "demo": "demo"
   },
   "tags": [
     "hailo",
